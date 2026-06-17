@@ -41,19 +41,20 @@ func main() {
 	fmt.Printf("分享链接: %s\n", resp1.ShareURL)
 	fmt.Printf("share_id: %s\n\n", resp1.ShareID)
 
-	// 2. 私密带提取码分享。
+	// 2. 私密带提取码分享（提取码必须4位字母数字混合，如 ab12）。
 	fmt.Println("=== 2. 私密带提取码分享 ===")
 	resp2, err := c.Share().Create(ctx, &share.CreateRequest{
 		FIDs:         []string{fid},
 		Title:        "quark-go-test-private",
 		Forever:      true,
 		WithPasscode: true,
-		Passcode:     "1234",
+		Passcode:     "ab12",
 	})
 	if err != nil {
 		log.Fatalf("创建私密分享失败: %v", err)
 	}
 	fmt.Printf("分享链接: %s\n", resp2.ShareURL)
+	fmt.Printf("提取码: %s\n", resp2.Passcode)
 	fmt.Printf("share_id: %s\n", resp2.ShareID)
 
 	fmt.Println("\n=== 实测通过 ===")
