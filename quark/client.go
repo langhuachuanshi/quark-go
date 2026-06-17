@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/cookiejar"
 	"net/url"
 	"strings"
 	"sync"
@@ -33,8 +32,9 @@ import (
 // 夸克 API base 与固定参数。
 const (
 	apiBase = "https://drive-pc.quark.cn/1/clouddrive"
-	// 夸克请求的公共 query 参数。
-	commonPr = "uqm"
+	// 夸克 PC 端请求的公共 query 参数。
+	// 注意：pr=ucpro（不是 uqm，uqm 会被当作游客返回 31001）。
+	commonPr = "ucpro"
 	commonFr = "pc"
 )
 
@@ -69,48 +69,13 @@ func New(ctx context.Context, opts ...Option) (*Client, error) {
 		return nil, fmt.Errorf("quark: cookie 无效（缺少 __puus），请从浏览器复制完整 cookie")
 	}
 
-	// 解析 cookie 到 cookiejar。
-	jar, err := parseCookieJar(result.Cookie)
-	if err != nil {
-		return nil, fmt.Errorf("quark: parse cookie failed: %w", err)
-	}
-
 	c := &Client{
 		http: &http.Client{
 			Timeout: 60e9, // 60s
-			Jar:     jar,
 		},
 		cookie: result.Cookie,
 	}
 	return c, nil
-}
-
-// parseCookieJar 把 cookie 字符串（如 "k1=v1; k2=v2"）解析到 cookiejar。
-func parseCookieJar(cookieStr string) (http.CookieJar, error) {
-	jar, _ := cookiejar.New(nil)
-	u, _ := url.Parse("https://pan.quark.cn")
-	// 解析 "k=v; k2=v2"。
-	pairs := strings.Split(cookieStr, ";")
-	var cookies []*http.Cookie
-	for _, p := range pairs {
-		p = strings.TrimSpace(p)
-		if p == "" {
-			continue
-		}
-		eq := strings.IndexByte(p, '=')
-		if eq < 0 {
-			continue
-		}
-		cookies = append(cookies, &http.Cookie{
-			Name:  strings.TrimSpace(p[:eq]),
-			Value: strings.TrimSpace(p[eq+1:]),
-		})
-	}
-	jar.SetCookies(u, cookies)
-	// 夸克的 cookie 也作用于 .quark.cn。
-	u2, _ := url.Parse("https://drive-pc.quark.cn")
-	jar.SetCookies(u2, cookies)
-	return jar, nil
 }
 
 // —— invoker.Invoker 实现 ——
@@ -136,6 +101,7 @@ func (c *Client) request(ctx context.Context, method, path string, body any, par
 	q := url.Values{}
 	q.Set("pr", commonPr)
 	q.Set("fr", commonFr)
+	q.Set("uc_param_str", "")
 	for k, v := range params {
 		q.Set(k, v)
 	}
@@ -158,6 +124,10 @@ func (c *Client) request(ctx context.Context, method, path string, body any, par
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("Referer", referer)
 	req.Header.Set("Origin", origin)
+	// cookie 直接注入 header（不用 cookiejar，避免跨域问题）。
+	if c.cookie != "" {
+		req.Header.Set("Cookie", c.cookie)
+	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json;charset=UTF-8")
 	}
