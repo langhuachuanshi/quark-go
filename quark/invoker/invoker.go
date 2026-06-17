@@ -42,6 +42,9 @@ type Invoker interface {
 	Get(ctx context.Context, path string, params map[string]string, headers map[string]string) ([]byte, int, error)
 	// Post 发 POST JSON 请求。
 	Post(ctx context.Context, path string, body any, params map[string]string, headers map[string]string) ([]byte, int, error)
+	// DownloadHeaders 返回下载直链所需的鉴权头（Cookie/Referer/User-Agent）。
+	// 夸克 /file/download 返回的临时直链 GET 时需要带登录态，否则 403 RequestDeniedByCallback。
+	DownloadHeaders() map[string]string
 }
 
 // Decode 反序列化，空体不报错。

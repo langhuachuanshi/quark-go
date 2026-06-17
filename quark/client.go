@@ -166,6 +166,16 @@ func (c *Client) Cookie() string {
 	return c.cookie
 }
 
+// DownloadHeaders 返回下载直链所需的鉴权头（Cookie/Referer/User-Agent）。
+// 夸克 /file/download 返回的临时直链 GET 时需带登录态，否则 403。
+func (c *Client) DownloadHeaders() map[string]string {
+	return map[string]string{
+		"Cookie":     c.Cookie(),
+		"Referer":    referer,
+		"User-Agent": userAgent,
+	}
+}
+
 // 编译期保证 Client 实现 Invoker。
 var _ invoker.Invoker = (*Client)(nil)
 

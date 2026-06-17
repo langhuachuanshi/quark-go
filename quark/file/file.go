@@ -8,6 +8,7 @@ package file
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/langhuachuanshi/quark-go/quark/invoker"
 	"github.com/langhuachuanshi/quark-go/quark/types"
@@ -122,15 +123,15 @@ func (s *Service) ListPage(ctx context.Context, req *ListRequest) ([]*types.File
 }
 
 // Get 获取文件详情。
-// 夸克接口：POST /file/info，body {fid, pdir_fid}。
+// 夸克接口：GET /file/info，参数 fid。
 func (s *Service) Get(ctx context.Context, fid string) (*types.File, error) {
-	body := map[string]any{"fid": fid}
+	params := map[string]any{"fid": fid}
 	var resp struct {
-		Code int         `json:"code"`
-		Msg  string      `json:"message"`
-		Data types.File  `json:"data"`
+		Code int        `json:"code"`
+		Msg  string     `json:"message"`
+		Data types.File `json:"data"`
 	}
-	if err := invoker.PostAndDecode(ctx, s.inv, "/file/info", body, nil, &resp); err != nil {
+	if err := invoker.GetAndDecode(ctx, s.inv, "/file/info", params, &resp); err != nil {
 		return nil, err
 	}
 	if resp.Code != 0 {
@@ -140,5 +141,122 @@ func (s *Service) Get(ctx context.Context, fid string) (*types.File, error) {
 	return &f, nil
 }
 
-// 确保编译期 fmt 被使用（错误格式化预留）。
-var _ = fmt.Sprintf
+// —— 文件管理 ——
+//
+// 夸克这几个接口都是 POST + JSON body，外层 {code,message,data}，code!=0 即失败。
+// Move/Delete 底层就是批量的（filelist 传多个 fid）。
+
+// MakeDir 在 pdirFID 下创建名为 name 的文件夹，返回新文件夹的 fid。
+//
+// 夸克 /file 接口的响应不含新 fid，所以创建成功后会 List 父目录按名匹配取 fid。
+// （夸克建目录有秒级延迟，AList 实现里 MakeDir 后也 sleep 1s。）
+// pdirFID 留空或 "0" 表示根目录。
+func (s *Service) MakeDir(ctx context.Context, pdirFID, name string) (string, error) {
+	if name == "" {
+		return "", invoker.NewAPIError(0, "name is required")
+	}
+	if pdirFID == "" {
+		pdirFID = "0"
+	}
+	body := map[string]any{
+		"dir_init_lock": false,
+		"dir_path":      "",
+		"file_name":     name,
+		"pdir_fid":      pdirFID,
+	}
+	var resp struct {
+		Code int    `json:"code"`
+		Msg  string `json:"message"`
+	}
+	if err := invoker.PostAndDecode(ctx, s.inv, "/file", body, nil, &resp); err != nil {
+		return "", err
+	}
+	if resp.Code != 0 {
+		return "", invoker.NewAPIError(resp.Code, resp.Msg)
+	}
+
+	// 建目录有延迟，稍等后按名查 fid。
+	time.Sleep(time.Second)
+	files, err := s.List(ctx, &ListRequest{PDirFID: pdirFID, Size: 200})
+	if err != nil {
+		return "", fmt.Errorf("makdir 成功但查 fid 失败: %w", err)
+	}
+	for _, f := range files {
+		if f.IsFolder() && f.FileName == name {
+			return f.FID, nil
+		}
+	}
+	return "", fmt.Errorf("makdir 成功但在父目录未找到名为 %q 的文件夹", name)
+}
+
+// Rename 重命名单个文件/文件夹。
+// 夸克接口：POST /file/rename，body {fid, file_name}。
+func (s *Service) Rename(ctx context.Context, fid, newName string) error {
+	if fid == "" || newName == "" {
+		return invoker.NewAPIError(0, "fid and newName are required")
+	}
+	body := map[string]any{"fid": fid, "file_name": newName}
+	var resp struct {
+		Code int    `json:"code"`
+		Msg  string `json:"message"`
+	}
+	if err := invoker.PostAndDecode(ctx, s.inv, "/file/rename", body, nil, &resp); err != nil {
+		return err
+	}
+	if resp.Code != 0 {
+		return invoker.NewAPIError(resp.Code, resp.Msg)
+	}
+	return nil
+}
+
+// Move 把 fids（一个或多个）移动到 toDirFID 目录下。
+// 夸克接口：POST /file/move，底层批量。
+func (s *Service) Move(ctx context.Context, fids []string, toDirFID string) error {
+	if len(fids) == 0 {
+		return invoker.NewAPIError(0, "fids is required")
+	}
+	if toDirFID == "" {
+		toDirFID = "0"
+	}
+	body := map[string]any{
+		"action_type":  1,
+		"exclude_fids": []string{},
+		"filelist":     fids,
+		"to_pdir_fid":  toDirFID,
+	}
+	var resp struct {
+		Code int    `json:"code"`
+		Msg  string `json:"message"`
+	}
+	if err := invoker.PostAndDecode(ctx, s.inv, "/file/move", body, nil, &resp); err != nil {
+		return err
+	}
+	if resp.Code != 0 {
+		return invoker.NewAPIError(resp.Code, resp.Msg)
+	}
+	return nil
+}
+
+// Delete 删除 fids（一个或多个）。
+// 夸克接口：POST /file/delete，底层批量。删除进回收站。
+func (s *Service) Delete(ctx context.Context, fids []string) error {
+	if len(fids) == 0 {
+		return invoker.NewAPIError(0, "fids is required")
+	}
+	body := map[string]any{
+		"action_type":  1,
+		"exclude_fids": []string{},
+		"filelist":     fids,
+	}
+	var resp struct {
+		Code int    `json:"code"`
+		Msg  string `json:"message"`
+	}
+	if err := invoker.PostAndDecode(ctx, s.inv, "/file/delete", body, nil, &resp); err != nil {
+		return err
+	}
+	if resp.Code != 0 {
+		return invoker.NewAPIError(resp.Code, resp.Msg)
+	}
+	return nil
+}
